@@ -221,8 +221,10 @@ func (p *Platform) Deploy(
 
 	lf := &Lifecycle{
 		Init: func(s LifecycleStatus) error {
-			sess = session.New(aws.NewConfig().WithRegion(p.config.Region))
-
+			sess, err = session.NewSession(aws.NewConfig().WithRegion(p.config.Region))
+			if err != nil {
+				return err
+			}
 			cluster, err = p.SetupCluster(ctx, s, sess)
 			if err != nil {
 				return err
@@ -297,9 +299,11 @@ func (p *Platform) SetupCluster(ctx context.Context, s LifecycleStatus, sess *se
 		return "", err
 	}
 
-	if len(desc.Clusters) >= 1 {
-		s.Status("Found existing ECS cluster: %s", cluster)
-		return cluster, nil
+	for _, c := range desc.Clusters {
+		if *c.ClusterName == cluster && strings.ToLower(*c.Status) == "active" {
+			s.Status("Found existing ECS cluster: %s", cluster)
+			return cluster, nil
+		}
 	}
 
 	if p.config.EC2Cluster {
@@ -581,6 +585,7 @@ func (p *Platform) Launch(
 	runtime := aws.String("FARGATE")
 	if p.config.EC2Cluster {
 		runtime = aws.String("EC2")
+		cpuShares = p.config.CPU
 	} else {
 		if p.config.Memory == 0 {
 			return nil, fmt.Errorf("Memory value required for fargate")
@@ -631,7 +636,11 @@ func (p *Platform) Launch(
 		}
 	}
 
-	cpus := strconv.Itoa(cpuShares)
+	cpus := aws.String(strconv.Itoa(cpuShares))
+	// on EC2 launch type, `Cpu` is an optional field, so we leave it nil if it is 0
+	if p.config.EC2Cluster && cpuShares == 0 {
+		cpus = nil
+	}
 	mems := strconv.Itoa(p.config.Memory)
 
 	family := "waypoint-" + app.App
@@ -642,7 +651,7 @@ func (p *Platform) Launch(
 		ContainerDefinitions: []*ecs.ContainerDefinition{&def},
 
 		ExecutionRoleArn: aws.String(roleArn),
-		Cpu:              aws.String(cpus),
+		Cpu:              cpus,
 		Memory:           aws.String(mems),
 		Family:           aws.String(family),
 
@@ -1010,7 +1019,10 @@ func (p *Platform) Destroy(
 ) error {
 	log.Debug("removing deployment target group from load balancer")
 
-	sess := session.New(aws.NewConfig().WithRegion(p.config.Region))
+	sess, err := session.NewSession(aws.NewConfig().WithRegion(p.config.Region))
+	if err != nil {
+		return err
+	}
 	elbsrv := elbv2.New(sess)
 
 	listeners, err := elbsrv.DescribeListeners(&elbv2.DescribeListenersInput{
@@ -1158,7 +1170,7 @@ func (p *Platform) Documentation() (*docs.Documentation, error) {
 deploy {
   use "aws-ecs" {
     region = "us-east-1"
-    memory = "512"
+    memory = 512
   }
 }
 `)

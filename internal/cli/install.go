@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"os/exec"
 	"strings"
 	"time"
@@ -44,14 +45,52 @@ type InstallCommand struct {
 }
 
 func (c *InstallCommand) InstallKubernetes(
-	ctx context.Context, st terminal.Status, log hclog.Logger,
+	ctx context.Context, ui terminal.UI, log hclog.Logger,
 ) (*clicontext.Config, *pb.ServerConfig_AdvertiseAddr, string, int) {
-	stdout, stderr, err := c.ui.OutputWriters()
+	sg := ui.StepGroup()
+	defer func() { sg.Wait() }()
+
+	s := sg.Add("Inspecting Kubernetes cluster...")
+	defer func() { s.Abort() }()
+
+	// Build our K8S client.
+	config := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(),
+		&clientcmd.ConfigOverrides{},
+	)
+	clientconfig, err := config.ClientConfig()
 	if err != nil {
-		panic(err)
+		c.ui.Output(
+			"Error initializing kubernetes client: %s", clierrors.Humanize(err),
+			terminal.WithErrorStyle(),
+		)
+		return nil, nil, "", 1
+	}
+
+	clientset, err := kubernetes.NewForConfig(clientconfig)
+	if err != nil {
+		c.ui.Output(
+			"Error initializing kubernetes client: %s", clierrors.Humanize(err),
+			terminal.WithErrorStyle(),
+		)
+		return nil, nil, "", 1
+	}
+
+	// If this is kind, then we want to warn the user that they need
+	// to have some loadbalancer system setup or this will not work.
+	_, err = clientset.AppsV1().DaemonSets("kube-system").Get(
+		ctx, "kindnet", metav1.GetOptions{})
+	isKind := err == nil
+	if isKind {
+		s.Update(warnK8SKind)
+		s.Status(terminal.StatusWarn)
+		s.Done()
+		s = sg.Add("")
 	}
 
 	if c.secretFile != "" {
+		s.Update("Initializing Kubernetes secret")
+
 		data, err := ioutil.ReadFile(c.secretFile)
 		if err != nil {
 			c.ui.Output(
@@ -90,11 +129,10 @@ func (c *InstallCommand) InstallKubernetes(
 
 		cmd := exec.Command("kubectl", "create", "-f", "-")
 		cmd.Stdin = bytes.NewReader(data)
-		cmd.Stdout = stdout
-		cmd.Stderr = stderr
+		cmd.Stdout = s.TermOutput()
+		cmd.Stderr = cmd.Stdout
 
-		err = cmd.Run()
-		if err != nil {
+		if err = cmd.Run(); err != nil {
 			c.ui.Output(
 				"Error executing kubectl to install secret: %s", clierrors.Humanize(err),
 				terminal.WithErrorStyle(),
@@ -102,6 +140,9 @@ func (c *InstallCommand) InstallKubernetes(
 
 			return nil, nil, "", 1
 		}
+
+		s.Done()
+		s = sg.Add("")
 	}
 
 	// Decode our configuration
@@ -115,21 +156,17 @@ func (c *InstallCommand) InstallKubernetes(
 	}
 
 	if c.showYaml {
-		fmt.Fprint(stdout, output)
-		if output[:len(output)-1] != "\n" {
-			fmt.Fprint(stdout, "\n")
-		}
-
+		ui.Output(output)
 		return nil, nil, "", 0
 	}
 
+	s.Update("Creating Kubernetes resources...")
+
 	cmd := exec.Command("kubectl", "create", "-f", "-")
 	cmd.Stdin = strings.NewReader(output)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-
-	err = cmd.Run()
-	if err != nil {
+	cmd.Stdout = s.TermOutput()
+	cmd.Stderr = cmd.Stdout
+	if err = cmd.Run(); err != nil {
 		c.ui.Output(
 			"Error executing kubectl: %s", clierrors.Humanize(err),
 			terminal.WithErrorStyle(),
@@ -138,30 +175,37 @@ func (c *InstallCommand) InstallKubernetes(
 		return nil, nil, "", 1
 	}
 
-	st.Update("Waiting for Kubernetes service to be ready...")
+	s.Done()
+	s = sg.Add("Waiting for Kubernetes StatefulSet to be ready...")
+	log.Info("waiting for server statefulset to become ready")
+	err = wait.PollImmediate(2*time.Second, 10*time.Minute, func() (bool, error) {
+		ss, err := clientset.AppsV1().StatefulSets(c.config.Namespace).Get(
+			ctx, "waypoint-server", metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
 
-	// Build our K8S client.
-	config := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(),
-		&clientcmd.ConfigOverrides{},
-	)
-	clientconfig, err := config.ClientConfig()
+		if ss.Status.ReadyReplicas != ss.Status.Replicas {
+			log.Trace("statefulset not ready, waiting")
+			return false, nil
+		}
+
+		return true, nil
+	})
 	if err != nil {
 		c.ui.Output(
-			"Error initializing kubernetes client: %s", clierrors.Humanize(err),
+			"Error waiting for statefulset ready: %s\n\n%s",
+			clierrors.Humanize(err),
+			errInstallRunning,
 			terminal.WithErrorStyle(),
 		)
 		return nil, nil, "", 1
 	}
 
-	clientset, err := kubernetes.NewForConfig(clientconfig)
-	if err != nil {
-		c.ui.Output(
-			"Error initializing kubernetes client: %s", clierrors.Humanize(err),
-			terminal.WithErrorStyle(),
-		)
-		return nil, nil, "", 1
-	}
+	s.Update("Kubernetes StatefulSet reporting ready")
+	s.Done()
+
+	s = sg.Add("Waiting for Kubernetes service to become ready..")
 
 	// Wait for our service to be ready
 	log.Info("waiting for server service to become ready")
@@ -194,6 +238,17 @@ func (c *InstallCommand) InstallKubernetes(
 			return false, nil
 		}
 
+		endpoints, err := clientset.CoreV1().Endpoints(c.config.Namespace).Get(
+			ctx, c.config.ServiceName, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+
+		if len(endpoints.Subsets) == 0 {
+			log.Trace("endpoints are empty, waiting")
+			return false, nil
+		}
+
 		// Get the ports
 		var grpcPort int32
 		var httpPort int32
@@ -222,6 +277,12 @@ func (c *InstallCommand) InstallKubernetes(
 
 		// HTTP address to return
 		httpAddr = fmt.Sprintf("%s:%d", addr, httpPort)
+
+		// Ensure the service is ready to use before returning
+		_, err = net.DialTimeout("tcp", httpAddr, 1*time.Second)
+		if err != nil {
+			return false, nil
+		}
 		log.Info("http server ready", "httpAddr", addr)
 
 		// Set our advertise address
@@ -260,6 +321,8 @@ func (c *InstallCommand) InstallKubernetes(
 		return nil, nil, "", 1
 	}
 
+	s.Done()
+
 	return &contextConfig, &advertiseAddr, httpAddr, 0
 }
 
@@ -288,15 +351,12 @@ func (c *InstallCommand) Run(args []string) int {
 		advertiseAddr *pb.ServerConfig_AdvertiseAddr
 	)
 
-	st := c.ui.Status()
-	defer st.Close()
-
 	var err error
 	var httpAddr string
 
 	switch c.platform {
 	case "docker":
-		contextConfig, advertiseAddr, httpAddr, err = serverinstall.InstallDocker(ctx, c.ui, st, &c.config)
+		contextConfig, advertiseAddr, httpAddr, err = serverinstall.InstallDocker(ctx, c.ui, &c.config)
 		if err != nil {
 			c.ui.Output(
 				"Error installing server into docker: %s", clierrors.Humanize(err),
@@ -307,14 +367,14 @@ func (c *InstallCommand) Run(args []string) int {
 		}
 	case "kubernetes":
 		var code int
-		contextConfig, advertiseAddr, httpAddr, code = c.InstallKubernetes(ctx, st, log)
+		contextConfig, advertiseAddr, httpAddr, code = c.InstallKubernetes(ctx, c.ui, log)
 		if code != 0 || c.showYaml {
 			return code
 		}
 
 		// ok, inline below.
 	case "nomad":
-		contextConfig, advertiseAddr, httpAddr, err = serverinstall.InstallNomad(ctx, c.ui, st, &c.config)
+		contextConfig, advertiseAddr, httpAddr, err = serverinstall.InstallNomad(ctx, c.ui, &c.config)
 		if err != nil {
 			c.ui.Output(
 				"Error installing server into Nomad: %s", clierrors.Humanize(err),
@@ -332,8 +392,13 @@ func (c *InstallCommand) Run(args []string) int {
 		return 1
 	}
 
+	sg := c.ui.StepGroup()
+	defer sg.Wait()
+
+	s := sg.Add("Connecting to: %s", contextConfig.Server.Address)
+	defer func() { s.Abort() }()
+
 	// Connect
-	st.Update(fmt.Sprintf("Service ready. Connecting to: %s", contextConfig.Server.Address))
 	log.Info("connecting to the server so we can set the server config", "addr", contextConfig.Server.Address)
 	conn, err := serverclient.Connect(ctx,
 		serverclient.FromContextConfig(contextConfig),
@@ -350,9 +415,10 @@ func (c *InstallCommand) Run(args []string) int {
 	}
 	client := pb.NewWaypointClient(conn)
 
+	s.Update("Retrieving initial auth token...")
+
 	// We need our bootstrap token immediately
 	var callOpts []grpc.CallOption
-	st.Update("Retrieving initial auth token...")
 	tokenResp, err := client.BootstrapToken(ctx, &empty.Empty{})
 	if err != nil {
 		c.ui.Output(
@@ -397,7 +463,7 @@ func (c *InstallCommand) Run(args []string) int {
 	}
 
 	// Set the config
-	st.Update("Configuring server...")
+	s.Update("Configuring server...")
 	log.Debug("setting the advertise address", "addr", fmt.Sprintf("%#v", advertiseAddr))
 	_, err = client.SetServerConfig(ctx, &pb.SetServerConfigRequest{
 		Config: &pb.ServerConfig{
@@ -416,12 +482,13 @@ func (c *InstallCommand) Run(args []string) int {
 		return 1
 	}
 
+	s.Done()
+
 	// Close and success
-	st.Close()
 	c.ui.Output(outInstallSuccess,
 		c.contextName,
 		advertiseAddr.Addr,
-		httpAddr,
+		"https://"+httpAddr,
 		terminal.WithSuccessStyle(),
 	)
 	return 0
@@ -558,6 +625,14 @@ Alias: waypoint install
 }
 
 var (
+	warnK8SKind = strings.TrimSpace(`
+Kind cluster detected!
+
+Installing Waypoint to a Kind cluster requires that the cluster has
+LoadBalancer capabilities (such as metallb). If Kind isn't configured
+in this way, then the install may hang. If this happens, please delete
+all the Waypoint resources and try again.
+`)
 	errInstallRunning = strings.TrimSpace(`
 The Waypoint server has been deployed, but due to this error we were
 unable to automatically configure the local CLI or the Waypoint server
@@ -578,6 +653,6 @@ deployments. If this is incorrect, manually set it using the CLI command
 "waypoint server config-set".
 
 Advertise Address: %[2]s
-HTTP UI Address: %[3]s
+Web UI Address: %[3]s
 `)
 )

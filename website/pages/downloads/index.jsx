@@ -2,17 +2,22 @@ import { useMemo, useState, useEffect } from 'react'
 import VERSION from 'data/version.js'
 import Head from 'next/head'
 import HashiHead from '@hashicorp/react-head'
-
 import { productName, productSlug } from 'data/metadata'
 import { packageManagersByOs, getStartedLinks } from 'data/downloads'
 import ReleaseInformation from 'components/downloader/release-information'
-import { sortPlatforms, detectOs } from 'components/downloader/utils/downloader'
+import {
+  sortPlatforms,
+  detectOs,
+  sortAndFilterReleases,
+} from 'components/downloader/utils/downloader'
 import DownloadCards from 'components/downloader/cards'
 import styles from './style.module.css'
 
-export default function DownloadsPage({ releaseData, previousVersions }) {
-  const sortedDownloads = useMemo(() => sortPlatforms(releaseData), [
-    releaseData,
+export default function DownloadsPage({ releases }) {
+  // Sort our downloads for the DownloadCards
+  const currentRelease = releases.versions[VERSION]
+  const sortedDownloads = useMemo(() => sortPlatforms(currentRelease), [
+    currentRelease,
   ])
   const osKeys = Object.keys(sortedDownloads)
   const [osIndex, setSelectedOsIndex] = useState()
@@ -20,6 +25,13 @@ export default function DownloadsPage({ releaseData, previousVersions }) {
   const tabData = Object.keys(sortedDownloads).map((osKey) => ({
     os: osKey,
     packageManagers: packageManagersByOs[osKey] || null,
+  }))
+
+  // Sort our releases for our ReleaseInformation section
+  const latestReleases = sortAndFilterReleases(Object.keys(releases.versions))
+  const sortedReleases = latestReleases.map((releaseVersion) => ({
+    ...sortPlatforms(releases.versions[releaseVersion]),
+    version: releaseVersion,
   }))
 
   useEffect(() => {
@@ -41,6 +53,7 @@ export default function DownloadsPage({ releaseData, previousVersions }) {
         logo={
           <img
             className={styles.logo}
+            alt="Waypoint"
             src={require('./img/waypoint-logo.svg')}
           />
         }
@@ -70,17 +83,27 @@ export default function DownloadsPage({ releaseData, previousVersions }) {
         brand="blue"
         productId="waypoint"
         productName={productName}
-        releases={previousVersions}
-        latestVersion={releaseData.version}
+        releases={sortedReleases}
+        latestVersion={VERSION}
       />
     </div>
   )
 }
 
 export async function getStaticProps() {
-  return fetch(`https://releases.hashicorp.com/waypoint/${VERSION}/index.json`)
-    .then((r) => r.json())
-    .then((releaseData) => ({ props: { releaseData } }))
+  return fetch(`https://releases.hashicorp.com/waypoint/index.json`, {
+    headers: {
+      'Cache-Control': 'no-cache',
+    },
+  })
+    .then((res) => res.json())
+    .then((result) => {
+      return {
+        props: {
+          releases: result,
+        },
+      }
+    })
     .catch(() => {
       throw new Error(
         `--------------------------------------------------------

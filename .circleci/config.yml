@@ -3,7 +3,7 @@ version: 2.1
 
 references:
   images:
-    go: &GOLANG_IMAGE circleci/golang:1.14.3
+    go: &GOLANG_IMAGE circleci/golang:1.15.3
     middleman: &MIDDLEMAN_IMAGE hashicorp/middleman-hashicorp:0.3.44
     ember: &EMBER_IMAGE circleci/node:12-browsers
 
@@ -21,10 +21,9 @@ references:
     GIT_AUTHOR_NAME: circleci-waypoint
     GIT_COMMITTER_NAME: circleci-waypoint
     BASH_ENV: /home/circleci/project/.circleci/bash_env.sh
-    CIRCLE_BASE_URL: "https://circleci.com/workflow-run"
     DOCKER_BUILDKIT: 1
     REBUILD_UI: &REBUILD_UI 1
-    
+
 jobs:
   # Runs Go linters
   lint:
@@ -49,6 +48,7 @@ jobs:
             golangci-lint run --build-tags="$GOTAGS" -v --concurrency 2 \
               --disable-all \
               --timeout 10m \
+              --enable gofmt \
               --enable gosimple \
               --enable govet
       - notify_main_failure
@@ -141,7 +141,7 @@ jobs:
       - store_artifacts:
           path: *TEST_RESULTS_DIR
       - notify_main_failure
-  
+
   # create a development build
   dev-build:
     docker:
@@ -476,7 +476,7 @@ commands:
                         }, \
                         { \
                             \"title\": \"Full Workflow\", \
-                            \"value\": \"<${CIRCLE_BASE_URL}/${CIRCLE_WORKFLOW_ID}|${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}>\", \
+                            \"value\": \"<https://circleci.com/workflow-run/${CIRCLE_WORKFLOW_ID}|${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}>\", \
                             \"short\": \"true\" \
                         } \
                     ], \

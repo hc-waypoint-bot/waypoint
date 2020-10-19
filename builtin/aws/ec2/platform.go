@@ -14,11 +14,11 @@ import (
 	"github.com/hashicorp/go-hclog"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	"github.com/hashicorp/waypoint/builtin/aws/ami"
-	"github.com/hashicorp/waypoint/builtin/aws/utils"
 	"github.com/hashicorp/waypoint-plugin-sdk/component"
 	"github.com/hashicorp/waypoint-plugin-sdk/docs"
 	"github.com/hashicorp/waypoint-plugin-sdk/terminal"
+	"github.com/hashicorp/waypoint/builtin/aws/ami"
+	"github.com/hashicorp/waypoint/builtin/aws/utils"
 )
 
 const (
@@ -26,7 +26,7 @@ const (
 	labelNonce = "waypoint.hashicorp.com/nonce"
 )
 
-// Platform is the Platform implementation for Kubernetes.
+// Platform is the Platform implementation for Amazon EC2.
 type Platform struct {
 	config PlatformConfig
 }
@@ -69,7 +69,7 @@ func (p *Platform) ValidateAuth() error {
 // return func() *Releaser { return &Releaser{p: p} }
 // }
 
-// Deploy deploys an image to Kubernetes.
+// Deploy deploys an image to Amazon EC2.
 func (p *Platform) Deploy(
 	ctx context.Context,
 	log hclog.Logger,
@@ -90,8 +90,10 @@ func (p *Platform) Deploy(
 
 	st.Update("Creating EC2 instances in ASG...")
 
-	sess := session.New(aws.NewConfig().WithRegion(p.config.Region))
-
+	sess, err := session.NewSession(aws.NewConfig().WithRegion(p.config.Region))
+	if err != nil {
+		return nil, err
+	}
 	e := ec2.New(sess)
 
 	var (
@@ -293,18 +295,20 @@ func (p *Platform) Deploy(
 	return result, nil
 }
 
-// Destroy deletes the K8S deployment.
+// Destroy deletes the EC2 deployment.
 func (p *Platform) Destroy(
 	ctx context.Context,
 	log hclog.Logger,
 	deployment *Deployment,
 	ui terminal.UI,
 ) error {
-	sess := session.New(aws.NewConfig().WithRegion(p.config.Region))
-
+	sess, err := session.NewSession(aws.NewConfig().WithRegion(p.config.Region))
+	if err != nil {
+		return err
+	}
 	as := autoscaling.New(sess)
 
-	_, err := as.DeleteAutoScalingGroup(&autoscaling.DeleteAutoScalingGroupInput{
+	_, err = as.DeleteAutoScalingGroup(&autoscaling.DeleteAutoScalingGroupInput{
 		AutoScalingGroupName: aws.String(deployment.ServiceName),
 		ForceDelete:          aws.Bool(true),
 	})

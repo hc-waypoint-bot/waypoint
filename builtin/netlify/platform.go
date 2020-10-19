@@ -11,14 +11,14 @@ import (
 	netlify "github.com/netlify/open-api/go/porcelain"
 	"github.com/skratchdot/open-golang/open"
 
-	"github.com/hashicorp/waypoint/builtin/files"
 	"github.com/hashicorp/waypoint-plugin-sdk/component"
 	"github.com/hashicorp/waypoint-plugin-sdk/datadir"
 	"github.com/hashicorp/waypoint-plugin-sdk/docs"
 	"github.com/hashicorp/waypoint-plugin-sdk/terminal"
+	"github.com/hashicorp/waypoint/builtin/files"
 )
 
-// Platform is the Platform implementation for Google Cloud Run.
+// Platform is the Platform implementation for Netlify.
 type Platform struct {
 	config Config
 }

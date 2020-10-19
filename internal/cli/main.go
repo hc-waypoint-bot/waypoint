@@ -17,9 +17,9 @@ import (
 	"github.com/mitchellh/cli"
 	"github.com/mitchellh/go-glint"
 
+	"github.com/hashicorp/waypoint-plugin-sdk/terminal"
 	"github.com/hashicorp/waypoint/internal/pkg/signalcontext"
 	"github.com/hashicorp/waypoint/internal/version"
-	"github.com/hashicorp/waypoint-plugin-sdk/terminal"
 )
 
 const (
@@ -424,7 +424,7 @@ func logger(args []string) ([]string, hclog.Logger, io.Writer, error) {
 	// This overrides whatever the env var set.
 	var outArgs []string
 	for _, arg := range args {
-		if arg[0] != '-' {
+		if len(arg) != 0 && arg[0] != '-' {
 			outArgs = append(outArgs, arg)
 			continue
 		}
@@ -603,7 +603,7 @@ Waypoint will inject into your application via environment variables.
 This can be used to set values such as ports to listen on, database URLs,
 etc.
 
-For more information see: https://waypointproject.io/docs/config
+For more information see: https://waypointproject.io/docs/app-config
 `,
 	},
 

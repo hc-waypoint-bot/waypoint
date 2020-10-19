@@ -13,7 +13,7 @@ import (
 	"github.com/hashicorp/waypoint-plugin-sdk/terminal"
 )
 
-// Releaser is the ReleaseManager implementation for Google Cloud Run.
+// Releaser is the ReleaseManager implementation for Amazon ECS.
 type Releaser struct {
 	p      *Platform
 	config ReleaserConfig
@@ -37,7 +37,10 @@ func (r *Releaser) Release(
 	ui terminal.UI,
 	target *Deployment,
 ) (*Release, error) {
-	sess := session.New(aws.NewConfig().WithRegion(r.p.config.Region))
+	sess, err := session.NewSession(aws.NewConfig().WithRegion(r.p.config.Region))
+	if err != nil {
+		return nil, err
+	}
 	elbsrv := elbv2.New(sess)
 
 	dlb, err := elbsrv.DescribeLoadBalancers(&elbv2.DescribeLoadBalancersInput{

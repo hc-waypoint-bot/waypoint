@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/hashicorp/waypoint-plugin-sdk/terminal"
 	"github.com/hashicorp/waypoint/internal/cli/datagen"
 	clientpkg "github.com/hashicorp/waypoint/internal/client"
 	"github.com/hashicorp/waypoint/internal/clierrors"
@@ -21,7 +22,6 @@ import (
 	"github.com/hashicorp/waypoint/internal/pkg/flag"
 	pb "github.com/hashicorp/waypoint/internal/server/gen"
 	serverptypes "github.com/hashicorp/waypoint/internal/server/ptypes"
-	"github.com/hashicorp/waypoint-plugin-sdk/terminal"
 )
 
 type InitCommand struct {
@@ -155,7 +155,6 @@ func (c *InitCommand) Run(args []string) int {
 	}
 	for _, step := range steps {
 		if !step() {
-			c.ui.Output("")
 			c.ui.Output("Project had errors during initialization.\n"+
 				"Waypoint experienced some errors during project initialization. The output\n"+
 				"above should contain the failure messages. Please correct these errors and\n"+
