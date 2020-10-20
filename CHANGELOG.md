@@ -1,4 +1,4 @@
-## unreleased changes
+## unreleased
 
 FEATURES:
 
