@@ -10,7 +10,7 @@ var (
 	GitCommit   string
 	GitDescribe string
 
-	Version           = "0.0.12"
+	Version           = "0.0.13"
 	VersionPrerelease = ""
 	VersionMetadata   = ""
 )
