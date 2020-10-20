@@ -1,4 +1,4 @@
-## unreleased changes
+## 0.0.11 (October 20, 2020)
 
 FEATURES:
 
