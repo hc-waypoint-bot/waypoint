@@ -1,4 +1,4 @@
-## unreleased
+## 0.0.14 (October 20, 2020)
 
 FEATURES:
 
